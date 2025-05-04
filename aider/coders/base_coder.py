@@ -874,15 +874,38 @@ class Coder:
                 self.io.user_input(with_message)
                 self.run_one(with_message, preproc)
                 return self.partial_response_content
+            message_to_process = None
             while True:
                 try:
-                    if not self.io.placeholder:
-                        self.copy_context()
-                    user_message = self.get_input()
-                    self.run_one(user_message, preproc)
-                    self.show_undo_hint()
+                    if message_to_process is None:
+                        if not self.io.placeholder:
+                            self.copy_context()
+                        user_message = self.get_input()
+                        message_to_process = user_message
+                        do_preproc = True
+                    else:
+                        do_preproc = False
+
+                    if not message_to_process:
+                        message_to_process = None
+                        continue
+
+                    follow_up_needed = self.run_one(message_to_process, preproc=do_preproc)
+
+                    if self.reflected_message:
+                        message_to_process = self.reflected_message
+                        self.reflected_message = None
+                        self.io.tool_output("Attempting to fix errors...")
+                    elif follow_up_needed:
+                        message_to_process = follow_up_needed
+                        self.io.tool_output("Files added and edits applied. Asking LLM to review...")
+                    else:
+                        message_to_process = None
+                        self.show_undo_hint()
+
                 except KeyboardInterrupt:
                     self.keyboard_interrupt()
+                    message_to_process = None
         except EOFError:
             return
 
@@ -1539,31 +1562,59 @@ class Coder:
 
             self.show_exhausted_error()
             self.num_exhausted_context_windows += 1
-            return
+            # No automatic follow-up if context window is exhausted
+            return None
 
+        # Determine the content to analyze for file mentions, etc.
         if self.partial_response_function_call:
             args = self.parse_partial_args()
-            if args:
-                content = args.get("explanation") or ""
-            else:
-                content = ""
+            content_for_analysis = args.get("explanation") if args else ""
         elif self.partial_response_content:
-            content = self.partial_response_content
+            content_for_analysis = self.partial_response_content
         else:
-            content = ""
+            content_for_analysis = ""
+
+        edited = set()
+        add_rel_files_message = None
 
         if not interrupted:
-            add_rel_files_message = self.check_for_file_mentions(content)
-            if add_rel_files_message:
-                if self.reflected_message:
-                    self.reflected_message += "\n\n" + add_rel_files_message
-                else:
-                    self.reflected_message = add_rel_files_message
-                return
-
             try:
-                if self.reply_completed():
-                    return
+                edited = self.apply_updates()
+
+                if edited:
+                    self.aider_edited_files.update(edited)
+                    saved_message = self.auto_commit(edited)
+
+                if self.reply_completed() and not edited and not self.reflected_message:
+                     return None
+
+                if not self.reflected_message:
+                    add_rel_files_message = self.check_for_file_mentions(content_for_analysis)
+
+                if edited and self.auto_lint:
+                    lint_errors = self.lint_edited(edited)
+                    self.auto_commit(edited, context="Ran the linter")
+                    self.lint_outcome = not lint_errors
+                    if lint_errors:
+                        ok = self.io.confirm_ask("Attempt to fix lint errors?")
+                        if ok:
+                            self.reflected_message = lint_errors
+
+                shared_output = self.run_shell_commands()
+                if shared_output:
+                     self.cur_messages += [
+                         dict(role="user", content=shared_output),
+                         dict(role="assistant", content="Ok"),
+                     ]
+
+                if edited and self.auto_test:
+                    test_errors = self.commands.cmd_test(self.test_cmd)
+                    self.test_outcome = not test_errors
+                    if test_errors:
+                        ok = self.io.confirm_ask("Attempt to fix test errors?")
+                        if ok:
+                            self.reflected_message = test_errors
+
             except KeyboardInterrupt:
                 interrupted = True
 
@@ -1575,47 +1626,26 @@ class Coder:
             self.cur_messages += [
                 dict(role="assistant", content="I see that you interrupted my previous reply.")
             ]
-            return
-
-        edited = self.apply_updates()
-
-        if edited:
-            self.aider_edited_files.update(edited)
-            saved_message = self.auto_commit(edited)
-
-            if not saved_message and hasattr(self.gpt_prompts, "files_content_gpt_edits_no_repo"):
-                saved_message = self.gpt_prompts.files_content_gpt_edits_no_repo
-
-            self.move_back_cur_messages(saved_message)
+            return None
 
         if self.reflected_message:
-            return
+             return None
 
-        if edited and self.auto_lint:
-            lint_errors = self.lint_edited(edited)
-            self.auto_commit(edited, context="Ran the linter")
-            self.lint_outcome = not lint_errors
-            if lint_errors:
-                ok = self.io.confirm_ask("Attempt to fix lint errors?")
-                if ok:
-                    self.reflected_message = lint_errors
-                    return
+        if add_rel_files_message:
+            follow_up_message = (
+                "OK. I have added the files you requested and applied the initial edits based on"
+                " the previous context. Please review the current state and provide any further"
+                " instructions or modifications needed based on the updated context."
+            )
+            return follow_up_message
 
-        shared_output = self.run_shell_commands()
-        if shared_output:
-            self.cur_messages += [
-                dict(role="user", content=shared_output),
-                dict(role="assistant", content="Ok"),
-            ]
+        if edited:
+             saved_message = self.last_aider_commit_message
+             if not saved_message and hasattr(self.gpt_prompts, "files_content_gpt_edits_no_repo"):
+                 saved_message = self.gpt_prompts.files_content_gpt_edits_no_repo
+             self.move_back_cur_messages(saved_message)
 
-        if edited and self.auto_test:
-            test_errors = self.commands.cmd_test(self.test_cmd)
-            self.test_outcome = not test_errors
-            if test_errors:
-                ok = self.io.confirm_ask("Attempt to fix test errors?")
-                if ok:
-                    self.reflected_message = test_errors
-                    return
+        return None
 
     def reply_completed(self):
         pass
