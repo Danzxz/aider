@@ -1606,23 +1606,63 @@ class Coder:
             ]
             return None
 
+        # STEP 4: Decide return value and final actions
+
+        # If reflection is needed (from apply_updates), prioritize that.
         if self.reflected_message:
+             # Do not run commands or move messages back yet, reflection needs the current context
              return None
 
+        # If no reflection, but files were added, trigger automatic follow-up.
         if add_rel_files_message:
             follow_up_message = (
-                "OK. I have added the files you requested and applied the initial edits based on"
-                " the previous context. Please review the current state and provide any further"
+                "OK. I have added the files you requested. Please review the current state and provide any further"
                 " instructions or modifications needed based on the updated context."
             )
+            # Do not run commands or move messages back yet, follow-up needs the current context
             return follow_up_message
 
+        # --- Normal completion path: No reflection, no files added ---
+        # Now run lint, test, and shell commands only if we are in this path
+
+        if edited and self.auto_lint:
+            lint_errors = self.lint_edited(edited)
+            self.auto_commit(edited, context="Ran the linter")
+            self.lint_outcome = not lint_errors
+            if lint_errors:
+                ok = self.io.confirm_ask("Attempt to fix lint errors?")
+                if ok:
+                    self.reflected_message = lint_errors
+                    # If lint reflection is needed, return None; the main loop will handle it
+                    return None
+
+        if edited and self.auto_test:
+            test_errors = self.commands.cmd_test(self.test_cmd)
+            self.test_outcome = not test_errors
+            if test_errors:
+                ok = self.io.confirm_ask("Attempt to fix test errors?")
+                if ok:
+                    self.reflected_message = test_errors
+                    # If test reflection is needed, return None; the main loop will handle it
+                    return None
+
+        # Run shell commands only in the normal completion path
+        shared_output = self.run_shell_commands()
+        if shared_output:
+             # Add output to messages for the *next* turn.
+             self.cur_messages += [
+                 dict(role="user", content=shared_output),
+                 dict(role="assistant", content="Ok"),
+             ]
+
+        # Move messages back now if edits were made in this normal completion path
         if edited:
-             saved_message = self.last_aider_commit_message
+             saved_message = self.last_aider_commit_message # Use the message from the last commit
              if not saved_message and hasattr(self.gpt_prompts, "files_content_gpt_edits_no_repo"):
                  saved_message = self.gpt_prompts.files_content_gpt_edits_no_repo
              self.move_back_cur_messages(saved_message)
 
+        # Final return for normal completion
         return None
 
     def reply_completed(self):
