@@ -1610,6 +1610,16 @@ class Coder:
                         if ok:
                             self.reflected_message = test_errors
 
+                # Run shell commands after linting and testing
+                shared_output = self.run_shell_commands()
+                if shared_output:
+                     # Add output to messages for the *next* turn.
+                     # This might get overwritten if reflection or follow-up occurs.
+                     self.cur_messages += [
+                         dict(role="user", content=shared_output),
+                         dict(role="assistant", content="Ok"),
+                     ]
+
             except KeyboardInterrupt:
                 interrupted = True
 
