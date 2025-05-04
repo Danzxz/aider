@@ -1591,34 +1591,7 @@ class Coder:
                 if not self.reflected_message:
                     add_rel_files_message = self.check_for_file_mentions(content_for_analysis)
 
-                if edited and self.auto_lint:
-                    lint_errors = self.lint_edited(edited)
-                    self.auto_commit(edited, context="Ran the linter")
-                    self.lint_outcome = not lint_errors
-                    if lint_errors:
-                        ok = self.io.confirm_ask("Attempt to fix lint errors?")
-                        if ok:
-                            self.reflected_message = lint_errors
-
-                # Shell commands moved after testing block
-
-                if edited and self.auto_test:
-                    test_errors = self.commands.cmd_test(self.test_cmd)
-                    self.test_outcome = not test_errors
-                    if test_errors:
-                        ok = self.io.confirm_ask("Attempt to fix test errors?")
-                        if ok:
-                            self.reflected_message = test_errors
-
-                # Run shell commands after linting and testing
-                shared_output = self.run_shell_commands()
-                if shared_output:
-                     # Add output to messages for the *next* turn.
-                     # This might get overwritten if reflection or follow-up occurs.
-                     self.cur_messages += [
-                         dict(role="user", content=shared_output),
-                         dict(role="assistant", content="Ok"),
-                     ]
+                # Linting, testing, and shell commands are now moved to the normal completion path below
 
             except KeyboardInterrupt:
                 interrupted = True
