@@ -1600,12 +1600,7 @@ class Coder:
                         if ok:
                             self.reflected_message = lint_errors
 
-                shared_output = self.run_shell_commands()
-                if shared_output:
-                     self.cur_messages += [
-                         dict(role="user", content=shared_output),
-                         dict(role="assistant", content="Ok"),
-                     ]
+                # Shell commands moved after testing block
 
                 if edited and self.auto_test:
                     test_errors = self.commands.cmd_test(self.test_cmd)
