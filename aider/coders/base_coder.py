@@ -877,35 +877,13 @@ class Coder:
             message_to_process = None
             while True:
                 try:
-                    if message_to_process is None:
-                        if not self.io.placeholder:
-                            self.copy_context()
-                        user_message = self.get_input()
-                        message_to_process = user_message
-                        do_preproc = True
-                    else:
-                        do_preproc = False
-
-                    if not message_to_process:
-                        message_to_process = None
-                        continue
-
-                    follow_up_needed = self.run_one(message_to_process, preproc=do_preproc)
-
-                    if self.reflected_message:
-                        message_to_process = self.reflected_message
-                        self.reflected_message = None
-                        self.io.tool_output("Attempting to fix errors...")
-                    elif follow_up_needed:
-                        message_to_process = follow_up_needed
-                        self.io.tool_output("Files added and edits applied. Asking LLM to review...")
-                    else:
-                        message_to_process = None
-                        self.show_undo_hint()
-
+                    if not self.io.placeholder:
+                        self.copy_context()
+                    user_message = self.get_input()
+                    self.run_one(user_message, preproc)
+                    self.show_undo_hint()
                 except KeyboardInterrupt:
                     self.keyboard_interrupt()
-                    message_to_process = None
         except EOFError:
             return
 
